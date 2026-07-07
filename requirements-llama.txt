@@ -5,7 +5,7 @@
 torch==2.5.1
 transformers==4.46.3
 tokenizers==0.20.3
-peft==0.13.2
+peft==0.14.0
 numpy
 tqdm
 packaging
