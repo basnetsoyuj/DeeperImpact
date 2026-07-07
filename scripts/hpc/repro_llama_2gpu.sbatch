@@ -37,6 +37,8 @@ CKPT_DIR="${CKPT_DIR:-$REPO_DIR/checkpoints/repro_llama_mntp}"
 mkdir -p "$REPO_DIR/logs" "$CKPT_DIR"
 cd "$REPO_DIR"
 source "$VENV_DIR/bin/activate"
+export HF_HOME=/scratch/sjb8193/.cache/huggingface
+export HF_TOKEN="$(cat /scratch/sjb8193/.huggingface/token)"
 export PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
