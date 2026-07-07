@@ -53,9 +53,11 @@ for key, tix in term_map.items():
     s, e = raw["offset_mapping"][tix]
     covered = doc[s:e]
     assert key[0] in covered.casefold(), (key, covered)
-# first occurrence: "sony" appears twice; its token must cover the FIRST one
+# first occurrence: "sony" appears twice; its token must COVER the first one
+# (Llama BPE offsets include the leading space, so use containment, not ==)
 s, e = raw["offset_mapping"][term_map["sony"]]
-assert s == doc.index("Sony"), (s, doc.index("Sony"))
+assert s <= doc.index("Sony") < e, (s, e, doc.index("Sony"))
+assert e <= doc.index("Sony again") + len("Sony"), "matched the second occurrence"
 
 q_terms = DeepImpactLlama.process_query("Sony PS-LX300USB ethanol?")
 assert "sony" in q_terms and "ethanol" in q_terms and "?" not in q_terms
