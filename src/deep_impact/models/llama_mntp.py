@@ -117,6 +117,10 @@ class DeepImpactLlama(nn.Module):
                 token=token,
                 use_fast=True,
             )
+            # Llama ships without a pad token; pad with EOS (attention_mask
+            # zeroes it out, so the choice is inert for scoring)
+            if cls._hf_tokenizer.pad_token is None:
+                cls._hf_tokenizer.pad_token = cls._hf_tokenizer.eos_token
         return cls._hf_tokenizer
 
     # `model_cls.tokenizer.enable_truncation(...)` compatibility with train.py
