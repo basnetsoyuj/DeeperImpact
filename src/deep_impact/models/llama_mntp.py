@@ -240,6 +240,11 @@ class DeepImpactLlama(nn.Module):
         # then (optionally) attach ONE fresh retrieval LoRA.
         backbone = PeftModel.from_pretrained(backbone, cls.mntp_adapter_path, **auth)
         backbone = backbone.merge_and_unload()
+        # PEFT froze the base weights when wrapping; merge_and_unload returns
+        # them still frozen. Unfreeze for the full-FT default (the LoRA branch
+        # re-freezes appropriately via get_peft_model).
+        for p in backbone.parameters():
+            p.requires_grad_(True)
 
         if cls.lora_r > 0:
             lora = LoraConfig(
