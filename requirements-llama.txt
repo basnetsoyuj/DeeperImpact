@@ -1,0 +1,14 @@
+# Pinned environment for the llama_mntp backbone (and compatible with the
+# BERT path). The vendored bidirectional_llama.py imports LlamaFlashAttention2,
+# which transformers >= 4.48 removes; Llama-3 offset_mapping needs
+# tokenizers >= 0.20.1 (broken before that). Window: transformers 4.45-4.47.
+torch>=2.3
+transformers==4.46.3
+tokenizers==0.20.3
+peft==0.13.2
+numpy
+tqdm
+packaging
+huggingface-hub
+# NanoBEIR eval during training (--eval_every > 0)
+datasets

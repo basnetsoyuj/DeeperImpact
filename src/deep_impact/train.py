@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from src.deep_impact.models import DeepImpact, DeepPairwiseImpact, DeepImpactCrossEncoder
+from src.deep_impact.models import DeepImpact, DeepPairwiseImpact, DeepImpactCrossEncoder, DeepImpactLlama
 from src.deep_impact.training import Trainer, PairwiseTrainer, CrossEncoderTrainer, DistilTrainer, \
     InBatchNegativesTrainer
 from src.deep_impact.training.distil_trainer import DistilMarginMSE, DistilKLLoss
@@ -100,12 +100,18 @@ def run(
         in_batch_negatives: bool = False,
         start_with: Union[str, Path] = None,
         qrels_path: Union[str, Path] = None,
-        eval_every: int = 500
+        eval_every: int = 500,
+        backbone: str = "bert",
+        shuffle_positive: bool = False,
+        llama_lora_r: int = 0,
 ):
     # DeepImpact
     model_cls = DeepImpact
+    if backbone == "llama_mntp":
+        model_cls = DeepImpactLlama
+        model_cls.lora_r = llama_lora_r
     trainer_cls = Trainer
-    collate_function = partial(collate_fn, model_cls=DeepImpact, max_length=max_length)
+    collate_function = partial(collate_fn, model_cls=model_cls, max_length=max_length)
     dataset_cls = MSMarcoTriples
 
     # Pairwise
@@ -124,13 +130,20 @@ def run(
     if distil_mse:
         trainer_cls = DistilTrainer
         trainer_cls.loss = DistilMarginMSE()
-        collate_function = partial(distil_collate_fn, max_length=max_length)
-        dataset_cls = partial(DistillationScores, qrels_path=qrels_path)
+        collate_function = partial(distil_collate_fn, model_cls=model_cls, max_length=max_length)
+        dataset_cls = partial(DistillationScores, qrels_path=qrels_path,
+                              shuffle_positive=shuffle_positive)
     elif distil_kl:
         trainer_cls = DistilTrainer
         trainer_cls.loss = DistilKLLoss()
-        collate_function = partial(distil_collate_fn, max_length=max_length)
-        dataset_cls = DistillationScores
+        collate_function = partial(distil_collate_fn, model_cls=model_cls, max_length=max_length)
+        # shuffle_positive anchors every KL group with a qrels positive
+        # (needs qrels_path); otherwise the original contiguous grouping.
+        if shuffle_positive:
+            dataset_cls = partial(DistillationScores, qrels_path=qrels_path,
+                                  shuffle_positive=True)
+        else:
+            dataset_cls = DistillationScores
 
     if in_batch_negatives:
         trainer_cls = InBatchNegativesTrainer
@@ -158,8 +171,8 @@ def run(
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
-    evaluator = NanoBEIREvaluator(batch_size=64, verbose=False)
-    
+    evaluator = NanoBEIREvaluator(batch_size=64, verbose=False) if eval_every > 0 else None
+
     trainer = trainer_cls(
         model=model,
         optimizer=optimizer,
@@ -172,6 +185,9 @@ def run(
         gradient_accumulation_steps=gradient_accumulation_steps,
         evaluator=evaluator,
         eval_every=eval_every,
+        # bf16 for Llama (fp16 overflows its activations); fp16 (original
+        # behavior) for BERT
+        amp_dtype=torch.bfloat16 if backbone == "llama_mntp" else torch.float16,
     )
     trainer.train()
     trainer_cls.ddp_cleanup()
@@ -198,8 +214,15 @@ if __name__ == "__main__":
     parser.add_argument("--distil_kl", action="store_true", help="Use distillation loss with KL divergence loss")
     parser.add_argument("--in_batch_negatives", action="store_true", help="Use in-batch negatives")
     parser.add_argument("--start_with", type=Path, default=None, help="Start training with this checkpoint")
-    parser.add_argument("--eval_every", type=int, default=500, help="Evaluate every n steps")
-    
+    parser.add_argument("--eval_every", type=int, default=500, help="Evaluate every n steps (0 disables NanoBEIR eval)")
+    parser.add_argument("--backbone", type=str, default="bert", choices=["bert", "llama_mntp"],
+                        help="Backbone: bert (co-condenser DeepImpact, default) or llama_mntp "
+                             "(bidirectional Llama-3.2-1B with the MNTP adapter merged)")
+    parser.add_argument("--shuffle_positive", action="store_true",
+                        help="Shuffle each query's scored docs and anchor every group with a "
+                             "qrels positive (requires --qrels_path; works with --distil_kl)")
+    parser.add_argument("--llama_lora_r", type=int, default=0,
+                        help="LoRA rank for the llama_mntp backbone; 0 (default) = full fine-tune")
 
     # required for distillation loss with Margin MSE
     parser.add_argument("--qrels_path", type=Path, default=None, help="Path to the qrels file")
@@ -208,6 +231,7 @@ if __name__ == "__main__":
 
     assert not (args.distil_mse and args.distil_kl), "Cannot use both distillation losses at the same time"
     assert not (args.distil_mse and not args.qrels_path), "qrels_path is required for distillation loss with Margin MSE"
+    assert not (args.shuffle_positive and not args.qrels_path), "qrels_path is required for shuffle_positive"
 
     # pass all argparse arguments to run() as kwargs
     run(**vars(args))

@@ -30,6 +30,7 @@ class Trainer:
             gradient_accumulation_steps: int = 1,
             eval_every: int = 500,
             evaluator: BaseEvaluator = None,
+            amp_dtype: torch.dtype = torch.float16,
     ) -> None:
         self.seed = seed
         self.gpu_id = torch.distributed.get_rank()
@@ -41,6 +42,10 @@ class Trainer:
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.eval_every = eval_every
         self.evaluator = evaluator
+        # fp16 (default) keeps the original BERT behavior (autocast+GradScaler);
+        # bf16 is for the Llama backbone (fp16 overflows Llama activations) and
+        # disables the scaler, which is unnecessary for bf16.
+        self.amp_dtype = amp_dtype
         
         model_name = self.model.__class__.__name__
         last_checkpoint_path = (checkpoint_dir /
@@ -79,7 +84,8 @@ class Trainer:
         self.model.train()
 
         self.criterion = torch.nn.CrossEntropyLoss()
-        scaler = torch.cuda.amp.GradScaler()
+        # GradScaler is only meaningful (and only safe) for fp16
+        scaler = torch.cuda.amp.GradScaler(enabled=self.amp_dtype == torch.float16)
 
         # Resume training if checkpoint exists i.e. step > 0
         remaining = len(self.train_data) - self.checkpoint_callback.step
@@ -91,7 +97,7 @@ class Trainer:
             train_loss = 0
 
             for i, batch in enumerate(self.train_data):
-                with torch.cuda.amp.autocast():
+                with torch.cuda.amp.autocast(dtype=self.amp_dtype):
                     outputs = self.get_output_scores(batch)
                     loss = self.evaluate_loss(outputs, batch)
 
@@ -109,7 +115,7 @@ class Trainer:
                     self.optimizer.zero_grad()
 
                 if self.gpu_id == 0:
-                    if i % self.eval_every == 0 and self.evaluator is not None:
+                    if self.eval_every > 0 and i % self.eval_every == 0 and self.evaluator is not None:
                         self.logger.info(f"Evaluating NanoBEIR at iteration {i}")
                         metrics = self.evaluator.evaluate_all(self.model.module)
                         self.logger.info(f"Metrics: {metrics}")
