@@ -10,5 +10,7 @@ numpy
 tqdm
 packaging
 huggingface-hub
-# NanoBEIR eval during training (--eval_every > 0)
+# NanoBEIR eval during training (--eval_every > 0); train.py imports the
+# evaluator unconditionally, so beir is required even with --eval_every 0
 datasets
+beir
